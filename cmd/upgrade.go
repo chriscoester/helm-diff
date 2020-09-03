@@ -32,6 +32,7 @@ type diffCmd struct {
 	resetValues              bool
 	allowUnreleased          bool
 	noHooks                  bool
+	ignoreHooks              []string
 	includeTests             bool
 	suppressedKinds          []string
 	outputContext            int
@@ -108,6 +109,7 @@ func newChartCommand() *cobra.Command {
 	f.BoolVar(&diff.allowUnreleased, "allow-unreleased", false, "enables diffing of releases that are not yet deployed via Helm")
 	f.BoolVar(&diff.install, "install", false, "enables diffing of releases that are not yet deployed via Helm (equivalent to --allow-unreleased, added to match \"helm upgrade --install\" command")
 	f.BoolVar(&diff.noHooks, "no-hooks", false, "disable diffing of hooks")
+	f.StringArrayVar(&diff.ignoreHooks, "ignore-hooks", []string{}, "disable diffing of specific hooks. e.g. pre-install,post-install")
 	f.BoolVar(&diff.includeTests, "include-tests", false, "enable the diffing of the helm test hooks")
 	f.BoolVar(&diff.devel, "devel", false, "use development versions, too. Equivalent to version '>0.0.0-0'. If --version is set, this is ignored.")
 	f.StringArrayVar(&diff.suppressedKinds, "suppress", []string{}, "allows suppression of the values listed in the diff output")
@@ -163,6 +165,10 @@ func (d *diffCmd) runHelm3() error {
 		return fmt.Errorf("Failed to render chart: %s", err)
 	}
 
+	if !d.includeTests {
+		d.ignoreHooks = append(d.ignoreHooks, helm3TestHook, helm2TestSuccessHook)
+	}
+
 	currentSpecs := make(map[string]*manifest.MappingResult)
 	if !newInstall && !d.dryRun {
 		if !d.noHooks {
@@ -170,20 +176,14 @@ func (d *diffCmd) runHelm3() error {
 			if err != nil {
 				return err
 			}
+
 			releaseManifest = append(releaseManifest, hooks...)
 		}
-		if d.includeTests {
-			currentSpecs = manifest.Parse(string(releaseManifest), d.namespace)
-		} else {
-			currentSpecs = manifest.Parse(string(releaseManifest), d.namespace, helm3TestHook, helm2TestSuccessHook)
-		}
+		currentSpecs = manifest.Parse(string(releaseManifest), d.namespace, d.ignoreHooks...)
 	}
 	var newSpecs map[string]*manifest.MappingResult
-	if d.includeTests {
-		newSpecs = manifest.Parse(string(installManifest), d.namespace)
-	} else {
-		newSpecs = manifest.Parse(string(installManifest), d.namespace, helm3TestHook, helm2TestSuccessHook)
-	}
+	newSpecs = manifest.Parse(string(installManifest), d.namespace, d.ignoreHooks...)
+
 	seenAnyChanges := diff.Manifests(currentSpecs, newSpecs, d.suppressedKinds, d.showSecrets, d.outputContext, d.output, os.Stdout)
 
 	if d.detailedExitCode && seenAnyChanges {
@@ -197,6 +197,7 @@ func (d *diffCmd) runHelm3() error {
 }
 
 func (d *diffCmd) run() error {
+
 	if d.chartVersion == "" && d.devel {
 		d.chartVersion = ">0.0.0-0"
 	}
